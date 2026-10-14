@@ -1,0 +1,87 @@
+rules_version = '2';
+
+// ReliefHub Firestore security rules.
+// Policy summary:
+//  - Teachers browse and play WITHOUT an account: public read of published content.
+//  - Only school-approved administrator accounts may create or modify content.
+//  - Feedback and launch events are anonymous writes from the classroom browser,
+//    readable only by administrators.
+//  - No pupil personal data is ever stored.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Administrator allow-list ────────────────────────────────────────────
+    // Replace with your school's real administrator emails before deploying.
+    function isAdmin() {
+      let admins = [
+        'admin@yourschool.edu.my',
+        // add more administrators here
+      ];
+      return request.auth != null
+        && request.auth.token.email_verified == true
+        && request.auth.token.email in admins;
+    }
+
+    // ── Published content: readable by everyone, writable by admins ────────
+    match /activities/{id} {
+      allow read: if true;                    // teachers never sign in
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /questionSets/{id} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /picturePacks/{id} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /classes/{id} {
+      allow read: if true;                    // class profiles contain no pupil data
+      allow create, update, delete: if isAdmin();
+    }
+
+    // ── Anonymous classroom telemetry ──────────────────────────────────────
+    // The browser writes one small document per game launch and one per
+    // feedback submission. Writes are validated; reads are admin-only.
+    match /launchEvents/{id} {
+      allow create: if request.resource.data.keys().hasOnly(
+                        ['id', 'activityId', 'year', 'subject', 'at'])
+                     && request.resource.data.activityId is string
+                     && request.resource.data.year is int
+                     && request.resource.data.year >= 1
+                     && request.resource.data.year <= 6
+                     && request.resource.data.subject is string
+                     && request.resource.data.at is string;
+      allow read, update, delete: if isAdmin();
+    }
+
+    match /feedback/{id} {
+      allow create: if request.resource.data.keys().hasOnly(
+                        ['id', 'activityId', 'rating', 'comment', 'at'])
+                     && request.resource.data.activityId is string
+                     && request.resource.data.rating in [
+                          'very-suitable', 'suitable', 'neutral',
+                          'unsuitable', 'very-unsuitable']
+                     && (!('comment' in request.resource.data)
+                         || request.resource.data.comment is string);
+      allow read, update, delete: if isAdmin();
+    }
+
+    match /sessionCompletions/{id} {
+      allow create, update: if request.resource.data.keys().hasOnly(['count'])
+                           && request.resource.data.count is int
+                           && request.resource.data.count >= 0;
+      allow read: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // ── Deny everything else ───────────────────────────────────────────────
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
